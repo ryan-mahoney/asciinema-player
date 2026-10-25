@@ -9,7 +9,7 @@ rust-version = "1.85"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-avt = "0.16.0"
+avt = { git = "https://github.com/ryan-mahoney/avt", rev = "ec8b8264ba03fdd6ef9c84a61117d4fa78a9bbcf" }
 serde = { version = "1.0.130", features = ["derive"], default-features = false }
 serde-wasm-bindgen = "0.6.5"
 talc = "5.0.3"
