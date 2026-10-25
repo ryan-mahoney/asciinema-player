@@ -15,6 +15,7 @@ function mount(core, elem, opts = {}) {
     keystrokeOverlay: opts.keystrokeOverlay,
     autoPlay: opts.autoPlay,
     boldIsBright: opts.boldIsBright,
+    scrollback: opts.scrollback,
     adaptivePalette: opts.adaptivePalette,
     terminalFontSize: opts.terminalFontSize,
     terminalFontFamily: opts.terminalFontFamily,

@@ -3,19 +3,22 @@ import { init as initVt, module as vtWasmModule } from "./vt/Cargo.toml?custom";
 const vt = initVt({ module: vtWasmModule }); // trigger async loading of wasm
 const memory = vt.then((wasm) => wasm.default()).then((d) => d.memory);
 
+const DEFAULT_SCROLLBACK = 100;
+
 class Vt {
-  static async build(cols, rows, boldIsBright, logger) {
-    return new Vt(await vt, await memory, logger, cols, rows, boldIsBright);
+  static async build(cols, rows, boldIsBright, logger, scrollback = DEFAULT_SCROLLBACK) {
+    return new Vt(await vt, await memory, logger, cols, rows, boldIsBright, scrollback);
   }
 
-  constructor(wasm, memory, logger, cols, rows, boldIsBright) {
+  constructor(wasm, memory, logger, cols, rows, boldIsBright, scrollback) {
     this.wasm = wasm;
     this.memory = memory;
     this.logger = logger;
     this.cols = cols;
     this.rows = rows;
     this.boldIsBright = boldIsBright;
-    this.vt = wasm.create(cols, rows, 100, boldIsBright);
+    this.scrollback = scrollback;
+    this.vt = wasm.create(cols, rows, scrollback, boldIsBright);
   }
 
   feed(data) {
@@ -24,7 +27,7 @@ class Vt {
 
   reset(cols, rows, init = undefined) {
     this.logger.debug(`vt: reset (${cols}x${rows})`);
-    this.vt = this.wasm.create(cols, rows, 100, this.boldIsBright);
+    this.vt = this.wasm.create(cols, rows, this.scrollback, this.boldIsBright);
     this.cols = cols;
     this.rows = rows;
 
@@ -45,8 +48,16 @@ class Vt {
     return changedRows;
   }
 
-  getLine(n, cursorOn) {
-    return this.vt.getLine(n, cursorOn);
+  getLine(n, cursorOn, scrollOffset = 0) {
+    return this.vt.getLine(n, cursorOn, scrollOffset);
+  }
+
+  getScrollbackLength() {
+    return this.vt.getScrollbackLength();
+  }
+
+  takeScrollbackShift() {
+    return this.vt.takeScrollbackShift();
   }
 
   getDataView([ptr, len], size) {

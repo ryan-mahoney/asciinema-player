@@ -125,3 +125,15 @@ test("overrides win over input options", () => {
   expect(coreOpts({ speed: 2 }, { speed: 3 }).speed).toBe(3);
   expect(uiOpts({ theme: "dracula" }, { theme: "solarized" }).theme).toBe("solarized");
 });
+
+test("uiOpts accepts a non-negative integer scrollback option", () => {
+  expect(uiOpts({ scrollback: 0 }).scrollback).toBe(0);
+  expect(uiOpts({ scrollback: 5000 }).scrollback).toBe(5000);
+  expect("scrollback" in uiOpts({})).toBe(false);
+});
+
+for (const value of [-1, 1.5, "100", Infinity, NaN, true]) {
+  test(`uiOpts rejects scrollback option ${String(value)}`, () => {
+    expect(() => uiOpts({ scrollback: value })).toThrow(/scrollback option/);
+  });
+}

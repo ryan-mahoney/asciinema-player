@@ -25,6 +25,7 @@ const UI_OPTS = [
   "fit",
   "keystrokeOverlay",
   "rows",
+  "scrollback",
   "terminalFontFamily",
   "terminalFontSize",
   "terminalLineHeight",
@@ -95,6 +96,15 @@ function uiOpts(inputOpts, overrides = {}) {
 
   if (typeof opts.keystrokeOverlay !== "boolean") {
     throw new Error(`unsupported keystroke overlay option: ${opts.keystrokeOverlay}`);
+  }
+
+  if (
+    opts.scrollback !== undefined &&
+    !(Number.isInteger(opts.scrollback) && opts.scrollback >= 0)
+  ) {
+    throw new Error(
+      `scrollback option must be a non-negative integer, got: ${repr(opts.scrollback)}`,
+    );
   }
 
   return { ...opts, ...overrides };

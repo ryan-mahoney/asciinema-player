@@ -927,6 +927,189 @@ test("poster - data:text/plain - clears when playback starts", async ({ page }) 
     .toBe(false);
 });
 
+test("scrollback can be scrolled with keyboard shortcuts", async ({ page }) => {
+  const playerApi = await createPlayer(page, "/assets/scrollback.cast", { autoPlay: true });
+  await expectTermText(page, "line 40");
+  await playerApi.events.waitFor("ended");
+  await focusPlayer(page);
+  const indicator = page.locator(".ap-scroll-indicator");
+
+  await expect(indicator).toBeHidden();
+
+  // 10 rows, so a page is 9 lines and there are 31 lines in the scrollback
+  await page.keyboard.press("PageUp");
+  await expectFirstTermLine(page, "line 23");
+  await expect(indicator).toHaveText(/↓\s*9 lines below/);
+
+  await page.keyboard.press("Shift+ArrowUp");
+  await expectFirstTermLine(page, "line 22");
+  await expect(indicator).toHaveText(/↓\s*10 lines below/);
+
+  await page.keyboard.press("Home");
+  await expectFirstTermLine(page, "line 01");
+  await expect(indicator).toHaveText(/↓\s*31 lines below/);
+
+  await page.keyboard.press("PageDown");
+  await expectFirstTermLine(page, "line 10");
+
+  await page.keyboard.press("Shift+ArrowDown");
+  await expectFirstTermLine(page, "line 11");
+
+  await page.keyboard.press("End");
+  await expectFirstTermLine(page, "line 32");
+  await expect(indicator).toBeHidden();
+});
+
+test("scrollback can be scrolled with the mouse wheel", async ({ page }) => {
+  const playerApi = await createPlayer(page, "/assets/scrollback.cast", { autoPlay: true });
+  await expectTermText(page, "line 40");
+  await playerApi.events.waitFor("ended");
+  const terminal = page.locator(".ap-term");
+  const box = await terminal.boundingBox();
+  const lineHeight = box.height / 10;
+
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+
+  await page.mouse.wheel(0, -3.5 * lineHeight);
+  await expectFirstTermLine(page, "line 29");
+
+  await page.mouse.wheel(0, -1000 * lineHeight);
+  await expectFirstTermLine(page, "line 01");
+
+  await page.mouse.wheel(0, 1.5 * lineHeight);
+  await expectFirstTermLine(page, "line 02");
+
+  await page.mouse.wheel(0, 1000 * lineHeight);
+  await expectFirstTermLine(page, "line 32");
+  await expect(page.locator(".ap-scroll-indicator")).toBeHidden();
+});
+
+test("scroll indicator jumps to the latest output", async ({ page }) => {
+  const playerApi = await createPlayer(page, "/assets/scrollback.cast", { autoPlay: true });
+  await expectTermText(page, "line 40");
+  await playerApi.events.waitFor("ended");
+  await focusPlayer(page);
+
+  await page.keyboard.press("Home");
+  await expectFirstTermLine(page, "line 01");
+
+  await page.locator(".ap-scroll-indicator").click();
+  await expectFirstTermLine(page, "line 32");
+  await expect(page.locator(".ap-scroll-indicator")).toBeHidden();
+});
+
+test("scrolled back view stays in place when new output arrives", async ({ page }) => {
+  await createPlayer(page, "/assets/scrollback-late.cast", { autoPlay: true });
+  await expectTermText(page, "line 40");
+  await focusPlayer(page);
+
+  await page.keyboard.press("PageUp");
+  await expectFirstTermLine(page, "line 23");
+
+  // 5 more lines arrive at 2s, pushing 5 more lines into the scrollback
+  const indicator = page.locator(".ap-scroll-indicator");
+  await expect(indicator).toHaveText(/↓\s*14 lines below/, { timeout: 4000 });
+  await expectFirstTermLine(page, "line 23");
+
+  await page.keyboard.press("End");
+  await expectTermText(page, "late 05");
+});
+
+test("scrollback is cleared by CSI 3 J so full redraws don't duplicate it", async ({ page }) => {
+  const playerApi = await createPlayer(page, "/assets/scrollback-redraw.cast", { autoPlay: true });
+  await playerApi.events.waitFor("ended");
+  await focusPlayer(page);
+
+  await page.keyboard.press("Home");
+  await expectFirstTermLine(page, "line 01");
+  await expect(page.locator(".ap-scroll-indicator")).toHaveText(/↓\s*20 lines below/);
+});
+
+test("scrollback option set to 0 disables scrolling", async ({ page }) => {
+  const playerApi = await createPlayer(page, "/assets/scrollback.cast", {
+    autoPlay: true,
+    scrollback: 0,
+  });
+
+  await expectTermText(page, "line 40");
+  await playerApi.events.waitFor("ended");
+  await focusPlayer(page);
+
+  await page.keyboard.press("PageUp");
+  await page.keyboard.press("Home");
+  await expectFirstTermLine(page, "line 32");
+  await expect(page.locator(".ap-scroll-indicator")).toBeHidden();
+});
+
+test("scrollback option limits the number of lines kept", async ({ page }) => {
+  const playerApi = await createPlayer(page, "/assets/scrollback.cast", {
+    autoPlay: true,
+    scrollback: 5,
+  });
+
+  await expectTermText(page, "line 40");
+  await playerApi.events.waitFor("ended");
+  await focusPlayer(page);
+
+  await page.keyboard.press("Home");
+  await expectFirstTermLine(page, "line 27");
+  await expect(page.locator(".ap-scroll-indicator")).toHaveText(/↓\s*5 lines below/);
+});
+
+test.describe("with a touch screen", () => {
+  test.use({ hasTouch: true });
+
+  test("scrollback can be scrolled by dragging", async ({ page }) => {
+    const playerApi = await createPlayer(page, "/assets/scrollback.cast", { autoPlay: true });
+    await expectTermText(page, "line 40");
+    await playerApi.events.waitFor("ended");
+    const box = await page.locator(".ap-term").boundingBox();
+    const lineHeight = box.height / 10;
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 4;
+
+    const drag = (fromY, toY, steps = 4) =>
+      page.evaluate(
+        ({ x, fromY, toY, steps }) => {
+          const target = document.querySelector(".ap-player");
+          const touch = (clientY) =>
+            new Touch({ identifier: 1, target, clientX: x, clientY, pageX: x, pageY: clientY });
+
+          const fire = (type, clientY) => {
+            const t = touch(clientY);
+            const touches = type === "touchend" ? [] : [t];
+
+            target.dispatchEvent(
+              new TouchEvent(type, {
+                touches,
+                targetTouches: touches,
+                changedTouches: [t],
+                bubbles: true,
+                cancelable: true,
+              }),
+            );
+          };
+
+          fire("touchstart", fromY);
+
+          for (let i = 1; i <= steps; i++) {
+            fire("touchmove", fromY + ((toY - fromY) * i) / steps);
+          }
+
+          fire("touchend", toY);
+        },
+        { x, fromY, toY, steps },
+      );
+
+    // dragging down reveals older lines
+    await drag(y, y + 4.5 * lineHeight);
+    await expectFirstTermLine(page, "line 28");
+
+    await drag(y + 4.5 * lineHeight, y + 2.5 * lineHeight);
+    await expectFirstTermLine(page, "line 30");
+  });
+});
+
 const PLAYER_EVENTS = ["play", "playing", "pause", "ended", "error", "input", "marker"];
 
 async function createPlayer(page, src, opts = {}) {
@@ -1058,6 +1241,15 @@ async function expectTermText(page, fragments, timeout = 1000) {
       { timeout },
     )
     .toBe(true);
+}
+
+async function expectFirstTermLine(page, expected, timeout = 1000) {
+  const termText = page.locator(".ap-term-text");
+  await termText.waitFor();
+
+  await expect
+    .poll(async () => (await termText.innerText()).split("\n")[0].trimEnd(), { timeout })
+    .toBe(expected);
 }
 
 async function clickProgressBar(page, position) {

@@ -48,6 +48,19 @@ export default (props) => {
             </Show>
 
             <li>
+              <kbd>PgUp</kbd> / <kbd>PgDn</kbd> - scroll back / forward by a page (or use the mouse
+              wheel)
+            </li>
+
+            <li>
+              <kbd>Shift</kbd> + <kbd>↑</kbd> / <kbd>↓</kbd> - scroll back / forward by a line
+            </li>
+
+            <li>
+              <kbd>Home</kbd> / <kbd>End</kbd> - scroll to the oldest line / latest output
+            </li>
+
+            <li>
               <kbd>f</kbd> - toggle fullscreen mode
             </li>
 

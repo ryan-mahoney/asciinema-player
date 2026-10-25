@@ -58,6 +58,11 @@ export default (props) => {
   const [userActive, setUserActive] = createSignal(false);
   const [isHelpVisible, setIsHelpVisible] = createSignal(false);
   const [originalTheme, setOriginalTheme] = createSignal(null);
+  const [scrollOffset, setScrollOffset] = createSignal(0);
+  let scrollApi;
+  let wheelRemainder = 0;
+  let touchY = null;
+  let touchRemainder = 0;
   const terminalCols = createMemo(() => terminalSize().cols || 80);
   const terminalRows = createMemo(() => terminalSize().rows || 24);
   const controlBarHeight = () => (props.controls === false ? 0 : CONTROL_BAR_HEIGHT);
@@ -295,6 +300,14 @@ export default (props) => {
     logger.debug("view: font measurements", { charW, charH });
     setupResizeObserver();
     setContainerSize({ width: wrapperRef.offsetWidth, height: wrapperRef.offsetHeight });
+
+    // Registered manually since they need to be non-passive to be able to
+    // prevent page scrolling while the terminal scrollback is being scrolled.
+    playerRef.addEventListener("wheel", onWheel, { passive: false });
+    playerRef.addEventListener("touchstart", onTouchStart, { passive: true });
+    playerRef.addEventListener("touchmove", onTouchMove, { passive: false });
+    playerRef.addEventListener("touchend", onTouchEnd, { passive: true });
+    playerRef.addEventListener("touchcancel", onTouchEnd, { passive: true });
   });
 
   onCleanup(() => {
@@ -315,6 +328,11 @@ export default (props) => {
     core.stop();
     stopTimeUpdates();
     resizeObserver.disconnect();
+    playerRef.removeEventListener("wheel", onWheel);
+    playerRef.removeEventListener("touchstart", onTouchStart);
+    playerRef.removeEventListener("touchmove", onTouchMove);
+    playerRef.removeEventListener("touchend", onTouchEnd);
+    playerRef.removeEventListener("touchcancel", onTouchEnd);
   });
 
   const terminalElementSize = createMemo(() => {
@@ -393,8 +411,139 @@ export default (props) => {
     }
   };
 
+  // Scrolling the terminal scrollback: positive `lines` go back in history.
+  // Returns undefined when scrolling isn't possible in that direction, so
+  // that wheel, touch and key events can do their default thing instead.
+  // Turns a fractional wheel/touch delta (in lines, positive = back in
+  // history) into whole lines to scroll by, carrying the remainder over to
+  // the next event. Returns [lines to scroll, new remainder].
+  const accumulateScroll = (remainder, lines) => {
+    // Drop what's left over from scrolling in the opposite direction.
+    if (Math.sign(remainder) === -Math.sign(lines)) remainder = 0;
+
+    remainder += lines;
+    // Allow for floating point error, e.g. 0.5 + 1.5 summing to 1.9999999.
+    const whole = Math.trunc(remainder + Math.sign(remainder) * 1e-6);
+
+    return [whole, remainder - whole];
+  };
+
+  const canScrollBy = (lines) => {
+    if (scrollApi === undefined || lines === 0) return false;
+    const offset = scrollApi.getScrollOffset();
+
+    return lines > 0 ? offset < scrollApi.getScrollbackLength() : offset > 0;
+  };
+
+  const handleScrollKey = (e) => {
+    if (scrollApi === undefined) return undefined;
+
+    switch (e.key) {
+      case "PageUp":
+        return scrollApi.scrollByPages(1);
+      case "PageDown":
+        return scrollApi.scrollByPages(-1);
+      case "ArrowUp":
+        return e.shiftKey ? scrollApi.scrollBy(1) : undefined;
+      case "ArrowDown":
+        return e.shiftKey ? scrollApi.scrollBy(-1) : undefined;
+      case "Home":
+        return scrollApi.scrollToTop();
+      case "End":
+        return scrollApi.scrollToBottom();
+      default:
+        return undefined;
+    }
+  };
+
+  const onWheel = (e) => {
+    // Ctrl + wheel is the browser's zoom gesture.
+    if (scrollApi === undefined || e.ctrlKey || e.deltaY === 0) return;
+
+    let lines;
+
+    if (e.deltaMode === 1) {
+      lines = e.deltaY;
+    } else if (e.deltaMode === 2) {
+      lines = e.deltaY * terminalRows();
+    } else {
+      lines = e.deltaY / scrollApi.lineHeightPx();
+    }
+
+    // Wheel down (positive deltaY) goes towards the latest output.
+    const direction = -Math.sign(lines);
+
+    if (!canScrollBy(direction)) {
+      // Let the page scroll once the end of the scrollback is reached.
+      wheelRemainder = 0;
+      return;
+    }
+
+    e.preventDefault();
+    const [whole, remainder] = accumulateScroll(wheelRemainder, -lines);
+    wheelRemainder = remainder;
+
+    if (whole !== 0) {
+      scrollApi.scrollBy(whole);
+    }
+  };
+
+  const onTouchStart = (e) => {
+    if (e.touches.length === 1) {
+      touchY = e.touches[0].clientY;
+      touchRemainder = 0;
+    } else {
+      touchY = null;
+    }
+  };
+
+  const onTouchMove = (e) => {
+    if (scrollApi === undefined || touchY === null || e.touches.length !== 1) return;
+
+    const y = e.touches[0].clientY;
+    const lines = (y - touchY) / scrollApi.lineHeightPx();
+    touchY = y;
+
+    // Dragging down reveals older lines, like scrolling a regular page.
+    if (!canScrollBy(Math.sign(lines))) {
+      touchRemainder = 0;
+      return;
+    }
+
+    e.preventDefault();
+    const [whole, remainder] = accumulateScroll(touchRemainder, lines);
+    touchRemainder = remainder;
+
+    if (whole !== 0) {
+      scrollApi.scrollBy(whole);
+    }
+  };
+
+  const onTouchEnd = () => {
+    touchY = null;
+  };
+
+  const scrollToBottom = (e) => {
+    e?.preventDefault();
+    scrollApi?.scrollToBottom();
+    wrapperRef.focus();
+  };
+
   const onKeyDown = (e) => {
     if (e.altKey || e.metaKey || e.ctrlKey) {
+      return;
+    }
+
+    const scrolled = handleScrollKey(e);
+
+    if (scrolled !== undefined) {
+      // Only swallow the key when the scrollback actually moved, so that
+      // e.g. PageUp still scrolls the page when there's nothing to show.
+      if (scrolled) {
+        e.stopPropagation();
+        e.preventDefault();
+      }
+
       return;
     }
 
@@ -580,6 +729,9 @@ export default (props) => {
           blinking={blinking()}
           cursorMode={props.cursorMode}
           boldIsBright={props.boldIsBright}
+          scrollback={props.scrollback}
+          scrollRef={(api) => (scrollApi = api)}
+          onScroll={setScrollOffset}
           adaptivePalette={props.adaptivePalette}
           lineHeight={props.terminalLineHeight}
           preferEmbeddedTheme={preferEmbeddedTheme}
@@ -606,6 +758,18 @@ export default (props) => {
             onMuteClick={toggleMuted}
             ref={controlBarRef}
           />
+        </Show>
+        <Show when={scrollOffset() > 0}>
+          <button
+            type="button"
+            class="ap-scroll-indicator"
+            style={{ "--ap-scroll-indicator-bottom": `${controlBarHeight() + 12}px` }}
+            title="Jump to the latest output (End)"
+            onClick={scrollToBottom}
+          >
+            <span aria-hidden="true">↓</span> {scrollOffset()}{" "}
+            {scrollOffset() === 1 ? "line" : "lines"} below
+          </button>
         </Show>
         <Show when={keystrokes().length > 0}>
           <KeystrokesOverlay

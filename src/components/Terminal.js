@@ -22,8 +22,15 @@ export default (props) => {
   const vectorSymbolDefCache = new Set();
   const colorsCache = new Map();
   const attrClassCache = new Map();
-  // eslint-disable-next-line solid/reactivity -- VT is built once with initial size, resizes arrive via core events
-  const vtReady = Vt.build(props.cols, props.rows, props.boldIsBright, props.logger);
+  /* eslint-disable solid/reactivity -- VT is built once with initial size, resizes arrive via core events */
+  const vtReady = Vt.build(
+    props.cols,
+    props.rows,
+    props.boldIsBright,
+    props.logger,
+    props.scrollback,
+  );
+  /* eslint-enable solid/reactivity */
   let vt;
 
   const [size, setSize] = createSignal(
@@ -78,6 +85,10 @@ export default (props) => {
   let cssTheme;
   let cursorHold = false;
 
+  // Number of lines the view is scrolled back into the scrollback by.
+  // 0 means the regular, bottom-most view.
+  let scrollOffset = 0;
+
   onMount(() => {
     setupCanvas();
     setInitialTheme();
@@ -90,6 +101,7 @@ export default (props) => {
       core.addEventListener("reset", onVtReset);
       core.addEventListener("resize", onVtResize);
       core.addEventListener("output", onVtOutput);
+      props.scrollRef?.(scrollApi);
       props.onReady?.();
     });
   });
@@ -144,6 +156,8 @@ export default (props) => {
 
   function onVtReset({ size, theme, init }) {
     const changedRows = vt.reset(size.cols, size.rows, init);
+    // The scrollback was replaced, so return to the regular view.
+    setScrollOffset(0);
     onVtUpdate({ size, theme, changedRows });
   }
 
@@ -173,6 +187,14 @@ export default (props) => {
 
   function onVtUpdate({ size: newSize, theme, changedRows }) {
     let activity = false;
+    const scrollbackShift = vt.takeScrollbackShift();
+
+    if (scrollOffset > 0) {
+      // Keep the content the user is looking at in place while new lines
+      // push older ones into the scrollback. While scrolled back the rows
+      // on screen don't map to the view rows that changed, so redraw all.
+      setScrollOffset(scrollOffset + scrollbackShift, true);
+    }
 
     if (changedRows !== undefined) {
       for (const row of changedRows) {
@@ -218,6 +240,12 @@ export default (props) => {
           pendingChanges.rows.delete(row);
         }
       }
+
+      if (scrollOffset > 0) {
+        for (let row = 0; row < newSize.rows; row++) {
+          pendingChanges.rows.add(row);
+        }
+      }
     }
 
     if (activity && cursor.visible) {
@@ -226,6 +254,50 @@ export default (props) => {
 
     scheduleRender();
   }
+
+  function setScrollOffset(offset, forceRedraw = false) {
+    const max = vt === undefined ? 0 : vt.getScrollbackLength();
+    const newOffset = Math.max(0, Math.min(Math.round(offset), max));
+    const changed = newOffset !== scrollOffset;
+
+    if (changed || (forceRedraw && newOffset > 0)) {
+      scrollOffset = newOffset;
+      const rows = pendingChanges.size?.rows ?? size().rows;
+
+      for (let row = 0; row < rows; row++) {
+        pendingChanges.rows.add(row);
+      }
+
+      scheduleRender();
+    }
+
+    if (changed) {
+      props.onScroll?.(newOffset);
+    }
+
+    return changed;
+  }
+
+  // Returns the height of a terminal line in CSS pixels, used for turning
+  // wheel and touch deltas into lines.
+  function lineHeightPx() {
+    const rows = size().rows;
+    const height = el?.getBoundingClientRect().height ?? 0;
+
+    return rows > 0 && height > 0 ? height / rows : 16;
+  }
+
+  const scrollApi = {
+    // Scrolls by `lines` (positive = back in history). Returns true when the
+    // view moved, so callers can let the event through when it didn't.
+    scrollBy: (lines) => setScrollOffset(scrollOffset + lines),
+    scrollByPages: (pages) => setScrollOffset(scrollOffset + pages * Math.max(1, size().rows - 1)),
+    scrollToTop: () => setScrollOffset(Infinity),
+    scrollToBottom: () => setScrollOffset(0),
+    getScrollOffset: () => scrollOffset,
+    getScrollbackLength: () => (vt === undefined ? 0 : vt.getScrollbackLength()),
+    lineHeightPx,
+  };
 
   function toggleBlink() {
     setBlinkOn((blink) => {
@@ -278,7 +350,7 @@ export default (props) => {
   }
 
   function renderRow(rowIndex, theme, cursorOn) {
-    const line = vt.getLine(rowIndex, cursorOn);
+    const line = vt.getLine(rowIndex, cursorOn, scrollOffset);
 
     clearCanvasRow(rowIndex);
     renderRowBg(rowIndex, line.bg, theme);

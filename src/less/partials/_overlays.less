@@ -126,6 +126,33 @@
     }
   }
 
+  .ap-scroll-indicator {
+    position: absolute;
+    left: 50%;
+    bottom: var(--ap-scroll-indicator-bottom);
+    transform: translateX(-50%);
+    z-index: 25;
+    font-family: var(--term-font-family);
+    font-size: 14px;
+    line-height: 1;
+    white-space: nowrap;
+    color: var(--term-color-background);
+    background-color: var(--term-color-foreground);
+    opacity: 0.85;
+    border: none;
+    border-radius: 999px;
+    padding: 0.5em 1em;
+    margin: 0;
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    transition: opacity 120ms ease;
+
+    &:hover,
+    &:focus-visible {
+      opacity: 1;
+    }
+  }
+
   .ap-overlay-help {
     background-color: rgba(0,0,0,0.8);
     container-type: inline-size;

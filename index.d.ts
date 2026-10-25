@@ -74,6 +74,8 @@ export interface Options {
   keystrokeOverlay?: boolean;
   markers?: Marker[];
   pauseOnMarkers?: boolean;
+  /** Number of scrollback lines kept for scrolling back (default 100, 0 disables scrollback). */
+  scrollback?: number;
   terminalFontSize?: "small" | "medium" | "big" | string;
   terminalFontFamily?: string;
   terminalLineHeight?: number;

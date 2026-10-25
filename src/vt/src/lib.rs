@@ -30,6 +30,7 @@ pub struct Vt {
     raster_symbols: Vec<RasterSymbol>,
     vector_symbols: Vec<VectorSymbol>,
     codepoints: Vec<u32>,
+    scrollback_shift: i64,
 }
 
 #[derive(Serialize)]
@@ -103,19 +104,58 @@ pub fn create(cols: usize, rows: usize, scrollback_limit: usize, bold_is_bright:
         raster_symbols: Vec::with_capacity(cols),
         vector_symbols: Vec::with_capacity(cols),
         codepoints: Vec::with_capacity(cols),
+        scrollback_shift: 0,
     }
 }
 
 #[wasm_bindgen]
 impl Vt {
     pub fn feed(&mut self, s: &str) -> JsValue {
-        let changes = self.vt.feed_str(s);
-        serde_wasm_bindgen::to_value(&changes.lines).unwrap()
+        let scrollback_len = self.vt.scrollback_len();
+        let (lines, trimmed) = {
+            let changes = self.vt.feed_str(s);
+            (changes.lines, changes.scrollback.count())
+        };
+
+        self.track_scrollback_shift(scrollback_len, trimmed);
+
+        serde_wasm_bindgen::to_value(&lines).unwrap()
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) -> JsValue {
-        let changes = self.vt.resize(cols, rows);
-        serde_wasm_bindgen::to_value(&changes.lines).unwrap()
+        let scrollback_len = self.vt.scrollback_len();
+        let (lines, trimmed) = {
+            let changes = self.vt.resize(cols, rows);
+            (changes.lines, changes.scrollback.count())
+        };
+
+        self.track_scrollback_shift(scrollback_len, trimmed);
+
+        serde_wasm_bindgen::to_value(&lines).unwrap()
+    }
+
+    #[wasm_bindgen(js_name = getScrollbackLength)]
+    pub fn get_scrollback_length(&self) -> usize {
+        self.vt.scrollback_len()
+    }
+
+    /// Returns by how many lines the content moved up into the scrollback
+    /// since the last call, and resets the counter. It can be negative, e.g.
+    /// after the scrollback was cleared. The renderer uses it to keep the
+    /// content in place while the user is looking at the scrollback.
+    #[wasm_bindgen(js_name = takeScrollbackShift)]
+    pub fn take_scrollback_shift(&mut self) -> i32 {
+        let shift = self.scrollback_shift;
+        self.scrollback_shift = 0;
+
+        shift.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+    }
+
+    fn track_scrollback_shift(&mut self, prev_len: usize, trimmed: usize) {
+        // Lines trimmed off the top of the scrollback (due to its limit) were
+        // also pushed through it, so they count towards the shift.
+        let len = self.vt.scrollback_len();
+        self.scrollback_shift += (len + trimmed) as i64 - prev_len as i64;
     }
 
     #[wasm_bindgen(js_name = getSize)]
@@ -125,8 +165,10 @@ impl Vt {
         vec![cols, rows]
     }
 
+    /// Returns the line displayed in `row` when the view is scrolled back
+    /// by `offset` lines (0 means the regular, bottom-most view).
     #[wasm_bindgen(js_name = getLine)]
-    pub fn get_line(&mut self, row: usize, cursor_on: bool) -> JsValue {
+    pub fn get_line(&mut self, row: usize, cursor_on: bool, offset: usize) -> JsValue {
         let mut prev_bg_span: Option<BgSpan> = None;
         let mut prev_text_span: Option<TextSpan> = None;
         let mut column = 0u16;
@@ -137,17 +179,29 @@ impl Vt {
         self.vector_symbols.clear();
         self.codepoints.clear();
 
+        let scrollback_len = self.vt.scrollback_len();
+        let offset = offset.min(scrollback_len);
+
         let cursor_column = {
             let cursor = self.vt.cursor();
 
-            if cursor.visible && cursor.row == row && cursor_on {
+            // The cursor is part of the view, so it's hidden while scrolled back.
+            if cursor.visible && cursor.row == row && cursor_on && offset == 0 {
                 Some(cursor.col as u16)
             } else {
                 None
             }
         };
 
-        let cells = self.vt.line(row).cells().iter().filter(|c| c.width() > 0);
+        let index = scrollback_len - offset + row;
+
+        let line = if index < scrollback_len {
+            self.vt.scrollback_line(index)
+        } else {
+            self.vt.line(index - scrollback_len)
+        };
+
+        let cells = line.cells().iter().filter(|c| c.width() > 0);
 
         for (idx, cell) in cells.enumerate() {
             let mut ch = cell.char();
